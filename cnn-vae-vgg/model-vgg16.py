@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-GPU = False
+GPU = True
 import os
 
 if GPU:
@@ -23,6 +23,7 @@ from keras.layers import MaxPooling2D, Conv2D, Dense, Softmax, Flatten
 from keras.models import Model
 from keras import metrics
 from keras import backend as K   # 'generic' backend so code works with either tensorflow or theano
+from keras.optimizers import Adam
 
 from sys import exit
 import tensorflow as tf
@@ -40,7 +41,7 @@ import pickle
 img_shape = (500, 500, 4)
 batch_size = 16
 latent_dim = 50  # Number of latent dimension parameters
-epochs = 10
+epochs = 100
 # In[8]:
 
 
@@ -55,9 +56,12 @@ y = []
 artist_num = 0
 artists = {}
 
-for name in im_names:
+for name in im_names[:15000]:
     pic = Image.open(folder + name)
+    #pic = pic.convert('L')
     artist_name = name.split("_")[0]
+    if artist_name in ['Nirvana', 'Rammstein', 'Soundgarden']:
+        continue
     
     if artist_name in artists:
         y.append(artists[artist_name])
@@ -69,17 +73,30 @@ for name in im_names:
         
     x_i = np.array(pic)
     X.append(x_i)
+    #X.append(x_i.reshape(x_i.shape[0], x_i.shape[1], 1))
     
+print("Loaded %d images." % len(X))
 X = np.array(X)
 y = np.array(y)
+print(X.shape)
 
-val_pct = 0.1
-train_num = (1-val_pct)*len(X)
-X_train = X[:train_num] / 255
-y_train = y[:train_num]
+val_pct = 1
+train_num = int((1-val_pct)*len(X))
+#X_train = X[:train_num] / 255
+#y_train = y[:train_num]
+
+#X = X / 255
 
 X_val = X[train_num:] / 255
 y_val = y[train_num:]
+
+#X = X[:train_num]
+#y = y[:train_num]
+
+#X_train = X
+#y_train = y
+#del(X)
+#del(y)
 
 
 # In[10]:
@@ -152,8 +169,8 @@ shape_before_flattening = K.int_shape(x)
 
 x = Flatten()(x)
 
-x = Dense(4096, activation='relu')(x)
-x = Dense(4096, activation='relu')(x)
+x = Dense(1024, activation='relu')(x)
+x = Dense(1024, activation='relu')(x)
 
 # Two outputs, latent mean and (log)variance
 z_mu = Dense(latent_dim)(x)
@@ -195,8 +212,8 @@ x = layers.Reshape(shape_before_flattening[1:])(x)
 x = Conv2D(512, (3,3), strides=1, padding='same',
   activation='relu')(x)
 
-x = Conv2D(512, (3,3), strides=1, padding='same',
-  activation='relu')(x)
+#x = Conv2D(512, (3,3), strides=1, padding='same',
+#  activation='relu')(x)
 
 ###############################################
 x = layers.Conv2DTranspose(512, 3,
@@ -209,8 +226,8 @@ x = layers.Conv2DTranspose(512, 3,
 x = Conv2D(512, (3,3), strides=1, padding='same',
   activation='relu')(x)
 
-x = Conv2D(512, (3,3), strides=1, padding='same',
-  activation='relu')(x)
+#x = Conv2D(512, (3,3), strides=1, padding='same',
+#  activation='relu')(x)
 
 
 ###############################################
@@ -278,8 +295,9 @@ def vae_loss(x, z_decoded):
     z_decoded = K.flatten(z_decoded)
     # Reconstruction loss
     xent_loss = keras.metrics.binary_crossentropy(x, z_decoded)
+    xent_loss *= 500 * 500 * 4
     # KL divergence
-    kl_loss = -5e-4 * K.mean(1 + z_log_sigma - K.square(z_mu) - K.exp(z_log_sigma), axis=-1)
+    kl_loss = -0.5 * K.mean(1 + z_log_sigma - K.square(z_mu) - K.exp(z_log_sigma), axis=-1)
     return K.mean(xent_loss + kl_loss)
 
 
@@ -287,8 +305,10 @@ def vae_loss(x, z_decoded):
 
 
 # VAE model statement
+opt = Adam(lr=0.000001)
 vae = Model(input_img, z_decoded)
-vae.compile(optimizer='adam', loss=vae_loss)
+vae.compile(optimizer=opt, loss=vae_loss)
+#vae.load_weights('weights_vgg.001-297801.30.ckpt')
 vae.summary()
 
 
@@ -300,12 +320,48 @@ checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1,
                             save_best_only=False, save_weights_only=True,mode='auto', period=1)
 callbacks_list = [checkpoint]
 
-vae.fit(x=X_train, y=X_train,
-        shuffle=True,
-        epochs=epochs,
-        batch_size=batch_size,
-#        validation_split=0.1)
-        validation_data=(X_val, X_val))
+
+def data_gen(X):
+  n = len(X)
+  i = 0
+
+  while i < n:
+
+    yield X[i:i+batch_size]/255, i + batch_size >= n
+    i += batch_size
+
+old_vloss = 0
+err = 0.00001
+
+for e in range(epochs):
+#if False:
+  i = 0
+  for X_train, last_batch in data_gen(X[:train_num]):
+      i += batch_size
+      if i % 100 == 0:
+          print(i)
+      if i % 10000 == 0: # every 2k images, save latest
+        hist = vae.fit(x=X_train, y=X_train,
+              shuffle=True,
+              epochs=1,
+              callbacks=callbacks_list,
+              batch_size=batch_size,
+              validation_data=(X_val, X_val))
+       
+        vloss = hist.history['val_loss'][-1]
+
+        if abs(vloss - old_vloss) < err:
+            break
+        old_vloss = vloss
+      else:
+          vae.fit(x=X_train, y=X_train,
+              shuffle=True,
+              epochs=1,
+	      verbose=int(i % 100 == 0),
+              batch_size=batch_size)
+
+
+
 
 
 # In[ ]:
@@ -316,7 +372,7 @@ z_mu_new = encoder.predict(X_val, batch_size=batch_size)
 
 
 dd = lambda d, f: pickle.dump(d, open(f, "wb"))
-dd(d_mu_new, "z_mu.p")
+dd(z_mu_new, "z_mu.p")
 dd(y_val, "y_val.p")
 dd(artists, "artists.p")
 
