@@ -38,10 +38,11 @@ import pickle
 
 
 
-img_shape = (500, 500, 4)
-batch_size = 16
+img_shape = (224, 224, 3)
+batch_size = 32
 latent_dim = 50  # Number of latent dimension parameters
-epochs = 100
+epochs = 0
+kl_lambda = 1
 # In[8]:
 
 
@@ -56,9 +57,10 @@ y = []
 artist_num = 0
 artists = {}
 
-for name in im_names[:15000]:
+for name in im_names:
     pic = Image.open(folder + name)
     #pic = pic.convert('L')
+    pic = pic.resize((224, 224))
     artist_name = name.split("_")[0]
     if artist_name in ['Nirvana', 'Rammstein', 'Soundgarden']:
         continue
@@ -78,9 +80,11 @@ for name in im_names[:15000]:
 print("Loaded %d images." % len(X))
 X = np.array(X)
 y = np.array(y)
+
+X = X[:, :, :, :-1]
 print(X.shape)
 
-val_pct = 1
+val_pct = 0.25
 train_num = int((1-val_pct)*len(X))
 #X_train = X[:train_num] / 255
 #y_train = y[:train_num]
@@ -108,7 +112,7 @@ y_val = y[train_num:]
 input_img = keras.Input(shape=img_shape)
 
 x = Conv2D(64, (3,3), strides=1, padding='same',
-    input_shape=(500, 500, 4), 
+    input_shape=(224, 224, 3), 
     activation='relu')(input_img)
 
 x = Conv2D(64, (3,3), strides=1, padding='same',
@@ -169,8 +173,8 @@ shape_before_flattening = K.int_shape(x)
 
 x = Flatten()(x)
 
-x = Dense(1024, activation='relu')(x)
-x = Dense(1024, activation='relu')(x)
+x = Dense(4096, activation='relu')(x)
+x = Dense(4096, activation='relu')(x)
 
 # Two outputs, latent mean and (log)variance
 z_mu = Dense(latent_dim)(x)
@@ -217,7 +221,7 @@ x = Conv2D(512, (3,3), strides=1, padding='same',
 
 ###############################################
 x = layers.Conv2DTranspose(512, 3,
-                           padding='valid', 
+                           padding='same', 
                            activation='relu',
                            strides=(2, 2))(x)
 ###############################################
@@ -246,7 +250,7 @@ x = Conv2D(256, (3,3), strides=1, padding='same',
 
 ###############################################
 x = layers.Conv2DTranspose(256, 3,
-                           padding='valid', 
+                           padding='same', 
                            activation='relu',
                            strides=(2, 2))(x)
 ###############################################
@@ -270,7 +274,7 @@ x = layers.Conv2DTranspose(64, 3,
                            strides=(2, 2))(x)
 ###############################################
 
-x = layers.Conv2D(4, 3,
+x = layers.Conv2D(3, 3,
                   padding='same', 
                   activation='sigmoid')(x)
 
@@ -295,7 +299,7 @@ def vae_loss(x, z_decoded):
     z_decoded = K.flatten(z_decoded)
     # Reconstruction loss
     xent_loss = keras.metrics.binary_crossentropy(x, z_decoded)
-    xent_loss *= 500 * 500 * 4
+    xent_loss *= 224 * 224 * 3
     # KL divergence
     kl_loss = -0.5 * K.mean(1 + z_log_sigma - K.square(z_mu) - K.exp(z_log_sigma), axis=-1)
     return K.mean(xent_loss + kl_loss)
@@ -305,10 +309,10 @@ def vae_loss(x, z_decoded):
 
 
 # VAE model statement
-opt = Adam(lr=0.000001)
+opt = Adam(lr=0.0001)
 vae = Model(input_img, z_decoded)
 vae.compile(optimizer=opt, loss=vae_loss)
-#vae.load_weights('weights_vgg.001-297801.30.ckpt')
+vae.load_weights('weights_vgg.001-56393.69.ckpt')
 vae.summary()
 
 
@@ -319,6 +323,8 @@ filepath = "weights_vgg.{epoch:03d}-{val_loss:.2f}.ckpt"
 checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
                             save_best_only=False, save_weights_only=True,mode='auto', period=1)
 callbacks_list = [checkpoint]
+
+print("STARTING EPOCHS...")
 
 
 def data_gen(X):
@@ -331,16 +337,16 @@ def data_gen(X):
     i += batch_size
 
 old_vloss = 0
-err = 0.00001
+err = 0.0001
 
 for e in range(epochs):
 #if False:
   i = 0
   for X_train, last_batch in data_gen(X[:train_num]):
       i += batch_size
-      if i % 100 == 0:
+      if i > batch_size*5 and i % batch_size*5 == 0:
           print(i)
-      if i % 10000 == 0: # every 2k images, save latest
+      if (i > batch_size*30) and (i % (batch_size*30) == 0): # every 1k images, save latest
         hist = vae.fit(x=X_train, y=X_train,
               shuffle=True,
               epochs=1,
@@ -357,12 +363,12 @@ for e in range(epochs):
           vae.fit(x=X_train, y=X_train,
               shuffle=True,
               epochs=1,
-	      verbose=int(i % 100 == 0),
+	      verbose=int(i % batch_size*5 == 0),
               batch_size=batch_size)
 
 
 
-
+print("ENDED EPOCHS...")
 
 # In[ ]:
 
