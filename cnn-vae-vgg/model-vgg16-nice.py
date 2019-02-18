@@ -43,17 +43,38 @@ class CNN_VAE(object):
       self.batch_size = 32
       self.latent_dim = 50  # Number of latent dimension parameters
       self.epochs = 1
-      self.kl_lambda = 1
       self.artists = {}
       self.artist_num = 0
       self.val_pct = 0.5 # percent of validation
       self.learning_rate = 0.0001
 
-      self.weight_file = None
+      self.kl_lambda = 0.5
+      self.wae_lambda = 10
+      self.recon_lambda = 1
 
-      self.sp_folder = "spectrogram_images/"
+      self.z_temp = 1 # temperature - multiplier for sigma
+
+      self.prior_mu = 0
+      self.prior_sigma = 1
+      self.z_prior = None
+
+      self.kernel = 'RBF' # Gaussian
+
+      self.weight_file = None
+      self.model = None 
+
+      self.sp_folder = "cnn-vae-spectrogram/cnn-vae-vgg/spectrogram_images/"
 
       self.populate_images()
+        
+      self.get_z_prior()
+
+    def get_z_prior(self):
+
+      epsilon = K.random_normal(shape=(self.batch_size, self.latent_dim),
+                                mean=0., stddev=1.)
+      self.z_prior = self.prior_mu + self.prior_sigma * epsilon
+      return self.z_prior
 
 
     def populate_images(self, n=100):
@@ -160,8 +181,8 @@ class CNN_VAE(object):
 
         x = Flatten()(x)
 
-        x = Dense(4096, activation='relu')(x)
-        x = Dense(4096, activation='relu')(x)
+        x = Dense(32, activation='relu')(x)
+        x = Dense(32, activation='relu')(x)
 
         # Two outputs, latent mean and (log)variance
         self.z_mu = Dense(self.latent_dim)(x)
@@ -179,8 +200,8 @@ class CNN_VAE(object):
             return z_mu + K.exp(z_log_sigma) * epsilon
 
         # sample vector from the latent distribution
-
         self.z = layers.Lambda(sampling)([self.z_mu, self.z_log_sigma])
+#         self.z = self.sample_z_tilda_from_posterior()
 
         return self.z, self.z_mu, self.z_log_sigma
 
@@ -263,13 +284,16 @@ class CNN_VAE(object):
                           activation='sigmoid')(x)
 
         # decoder model statement
-        self.decoder = Model(decoder_input, x)
+        self.decoder_model = Model(decoder_input, x)
 
         # apply the decoder to the sample from the latent distribution
-        self.z_decoded = self.decoder(z_enc)
-        return self.z_decoded, self.decoder
+        self.z_decoded = self.decoder_model(z_enc)
+        return self.z_decoded, self.decoder_model
 
-    def build_model(self):
+    def build_model(self, loss=None):
+      if loss is None:
+        loss = self.vae_loss
+
       self.input_img = keras.Input(shape=self.img_shape)
       z_enc, z_mu, z_log_sigma = self.encoder(self.input_img)
       self.decoder_input = layers.Input(K.int_shape(z_enc)[1:])
@@ -278,14 +302,101 @@ class CNN_VAE(object):
 
       # VAE model statement
       opt = Adam(lr=self.learning_rate)
-      self.vae = Model(self.input_img, z_dec)
-      self.vae.compile(optimizer=opt, loss= self.vae_loss)
+      vae = Model(self.input_img, z_dec)
+      vae.compile(optimizer=opt, loss=loss)
       if self.weight_file:
           vae.load_weights(self.weight_file)
-      self.vae.summary()
+      vae.summary()
+      self.model = vae
+      return self.model
 
-      return self.vae
+    def sample_z_tilda_from_posterior(self):
 
+      epsilon = K.random_normal(K.shape(self.z_log_sigma))
+      self.z_tilda = self.z_mu + K.exp(self.z_log_sigma)*epsilon
+      return self.z_tilda
+
+
+    # sample_pz -- p(z)
+    # sample_qz -- q(z|x_i)
+    def mmd_penalty(self, sample_qz, sample_pz):
+        n = self.batch_size
+        n = tf.cast(n, tf.int32)
+        nf = tf.cast(n, tf.float32)
+        half_size = tf.cast((n * n - n) / 2, tf.int32)
+
+        norms_pz = tf.reduce_sum(tf.square(sample_pz), axis=1, keepdims=True)
+        dotprods_pz = tf.matmul(sample_pz, sample_pz, transpose_b=True)
+        distances_pz = norms_pz + tf.transpose(norms_pz) - 2. * dotprods_pz
+
+        norms_qz = tf.reduce_sum(tf.square(sample_qz), axis=1, keepdims=True)
+        dotprods_qz = tf.matmul(sample_qz, sample_qz, transpose_b=True)
+        distances_qz = norms_qz + tf.transpose(norms_qz) - 2. * dotprods_qz
+
+        dotprods = tf.matmul(sample_qz, sample_pz, transpose_b=True)
+        distances = norms_qz + tf.transpose(norms_pz) - 2. * dotprods
+
+        if self.kernel == 'RBF':
+            # Median heuristic for the sigma^2 of Gaussian kernel
+            sigma2_k = tf.nn.top_k(
+                tf.reshape(distances, [-1]), half_size).values[half_size - 1]
+            sigma2_k += tf.nn.top_k(
+                tf.reshape(distances_qz, [-1]), half_size).values[half_size - 1]
+            # if opts['verbose']:
+            #     sigma2_k = tf.Print(sigma2_k, [sigma2_k], 'Kernel width:')
+            res1 = tf.exp(- distances_qz / 2. / sigma2_k)
+            res1 += tf.exp(- distances_pz / 2. / sigma2_k)
+            res1 = tf.multiply(res1, 1. - tf.eye(n))
+            res1 = tf.reduce_sum(res1) / (nf * nf - nf)
+            res2 = tf.exp(- distances / 2. / sigma2_k)
+            res2 = tf.reduce_sum(res2) * 2. / (nf * nf)
+            stat = res1 - res2
+        elif self.kernel == 'IMQ':
+            # k(x, y) = C / (C + ||x - y||^2)
+            # C = tf.nn.top_k(tf.reshape(distances, [-1]), half_size).values[half_size - 1]
+            # C += tf.nn.top_k(tf.reshape(distances_qz, [-1]), half_size).values[half_size - 1]
+            #if opts['pz'] == 'normal':
+            #    Cbase = 2. * opts['zdim'] * sigma2_p
+            #elif opts['pz'] == 'sphere':
+            #    Cbase = 2.
+            #elif opts['pz'] == 'uniform':
+                # E ||x - y||^2 = E[sum (xi - yi)^2]
+                #               = zdim E[(xi - yi)^2]
+                #               = const * zdim
+            #    Cbase = opts['zdim']
+
+            Cbase = 2. * self.config['latent_dim'] * 2. * 1. # sigma2_p # for normal sigma2_p = 1
+            stat = 0.
+            for scale in [.1, .2, .5, 1., 2., 5., 10.]:
+                C = Cbase * scale
+                res1 = C / (C + distances_qz)
+                res1 += C / (C + distances_pz)
+                res1 = tf.multiply(res1, 1. - tf.eye(n))
+                res1 = tf.reduce_sum(res1) / (nf * nf - nf)
+                res2 = C / (C + distances)
+                res2 = tf.reduce_sum(res2) * 2. / (nf * nf)
+                stat += res1 - res2
+        return stat
+
+
+    def wae_loss(self, x, z_decoded):
+
+        wass_loss = self.mmd_penalty(self.z_prior, self.z)
+  
+        x = K.flatten(x)
+        z_decoded = K.flatten(z_decoded)
+
+        # Reconstruction loss
+        xent_loss = keras.metrics.binary_crossentropy(x, z_decoded)
+        for s in self.img_shape:
+            xent_loss *= s
+        # xent_loss *= 224 * 224 * 3
+
+        # KL divergence
+        kl_loss = - K.sum(1 + self.z_log_sigma - K.square(self.z_mu) - K.exp(self.z_log_sigma), axis=-1)
+        return K.mean(self.recon_lambda * xent_loss + \
+                      self.kl_lambda * kl_loss + \
+                      self.wae_lambda * wass_loss)
 
     def vae_loss(self, x, z_decoded):
         x = K.flatten(x)
@@ -293,16 +404,20 @@ class CNN_VAE(object):
 
         # Reconstruction loss
         xent_loss = keras.metrics.binary_crossentropy(x, z_decoded)
-        xent_loss *= 224 * 224 * 3
+        for s in self.img_shape:
+            xent_loss *= s
+        # xent_loss *= 224 * 224 * 3
 
         # KL divergence
-        kl_loss = - self.kl_lambda * K.mean(1 + self.z_log_sigma - K.square(self.z_mu) - K.exp(self.z_log_sigma), axis=-1)
-        return K.mean(xent_loss + kl_loss)
+        kl_loss = - K.sum(1 + self.z_log_sigma - K.square(self.z_mu) - K.exp(self.z_log_sigma), axis=-1)
+        return K.mean(self.recon_lambda * xent_loss + \
+                      self.kl_lambda * kl_loss)
 
+    
     def get_ckpointer(self):
-        filepath = "weights_vgg.{epoch:03d}-{val_loss:.2f}.ckpt"
+        filepath = "checkpoints/weights_vgg_wae.{epoch:03d}-{val_loss:.2f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
-                                    save_best_only=False, save_weights_only=True,mode='auto', period=1)
+                                    save_best_only=True, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
         return callbacks_list
 
@@ -313,12 +428,18 @@ class CNN_VAE(object):
 
       dd = lambda d, f: pickle.dump(d, open(f, "wb"))
       dd(z_mu_new, "z_mu.p")
-      dd(y_val, "y_val.p")
-      dd(artists, "artists.p")
+      dd(self.y_val, "y_val.p")
+      dd(self.artists, "artists.p")
 
 
-    def train(self):
-        vae = self.build_model()
+    def train(self, epochs=None):
+            
+        if epochs is None:
+            epochs = self.epochs
+        
+        model = self.build_model()
+
+        callbacks_list = self.get_ckpointer()
 
         print("STARTING EPOCHS...")
 
@@ -329,20 +450,19 @@ class CNN_VAE(object):
           while i < n:
 
             yield X[i:i+self.batch_size]/255
-            i += batch_size
+            i += self.batch_size
 
         old_vloss = 0
         err = 0.0001
 
-        for e in range(self.epochs):
-        #if False:
+        for e in range(epochs):
           i = 0
           for X_train in data_gen(self.X[:self.train_num]):
               i += self.batch_size
-              if i > self.batch_size*5 and i % self.batch_size*5 == 0:
+              if i > self.batch_size*10 and i % self.batch_size*10 == 0:
                   print(i)
-              if (i > self.batch_size*30) and (i % (self.batch_size*30) == 0): # every 1k images, save latest
-                hist = vae.fit(x=X_train, y=X_train,
+              if (i > self.batch_size*100) and (i % (self.batch_size*100) == 0): # every 1k images, save latest
+                hist = model.fit(x=X_train, y=X_train,
                       shuffle=True,
                       epochs=1,
                       callbacks=callbacks_list,
@@ -355,15 +475,15 @@ class CNN_VAE(object):
                     break
                 old_vloss = vloss
               else:
-                  vae.fit(x=X_train, y=X_train,
+                  model.fit(x=X_train, y=X_train,
                       shuffle=True,
                       epochs=1,
-                verbose=int(i % self.batch_size*5 == 0),
+                verbose=int(i % self.batch_size*10 == 0),
                       batch_size=self.batch_size)
 
 
-
 model = CNN_VAE()
-model.train()
+model.build_model(model.wae_loss)
+model.train(epochs=25)
 model.save_latent()
 
