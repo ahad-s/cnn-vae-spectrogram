@@ -45,7 +45,7 @@ class CNN_VAE(object):
       self.epochs = 1
       self.artists = {}
       self.artist_num = 0
-      self.val_pct = 0.5 # percent of validation
+      self.val_pct = 0.1 # percent of validation
       self.learning_rate = 0.0001
 
       self.kl_lambda = 0.5
@@ -59,11 +59,12 @@ class CNN_VAE(object):
       self.z_prior = None
 
       self.kernel = 'RBF' # Gaussian
-
+	
+      self.weight_file = 'weights_vgg_wae.001-56381.01.ckpt'
       self.weight_file = None
       self.model = None 
 
-      self.sp_folder = "cnn-vae-spectrogram/cnn-vae-vgg/spectrogram_images/"
+      self.sp_folder = "spectrogram_images/"
 
       self.populate_images()
         
@@ -77,7 +78,7 @@ class CNN_VAE(object):
       return self.z_prior
 
 
-    def populate_images(self, n=100):
+    def populate_images(self, n=-1):
         im_names = os.listdir(self.sp_folder)
         if n != -1:
             im_names = im_names[:n]
@@ -113,7 +114,7 @@ class CNN_VAE(object):
 
         self.train_num = int((1-self.val_pct)*len(self.X))
 
-        self.X_val = X[self.train_num:] / 255
+        self.X_val = self.X[self.train_num:] / 255
         self.y_val = y[self.train_num:]
 
     def encoder(self, input_img):
@@ -181,8 +182,8 @@ class CNN_VAE(object):
 
         x = Flatten()(x)
 
-        x = Dense(32, activation='relu')(x)
-        x = Dense(32, activation='relu')(x)
+        x = Dense(4096, activation='relu')(x)
+        x = Dense(4096, activation='relu')(x)
 
         # Two outputs, latent mean and (log)variance
         self.z_mu = Dense(self.latent_dim)(x)
@@ -325,11 +326,11 @@ class CNN_VAE(object):
         nf = tf.cast(n, tf.float32)
         half_size = tf.cast((n * n - n) / 2, tf.int32)
 
-        norms_pz = tf.reduce_sum(tf.square(sample_pz), axis=1, keepdims=True)
+        norms_pz = tf.reduce_sum(tf.square(sample_pz), axis=1)
         dotprods_pz = tf.matmul(sample_pz, sample_pz, transpose_b=True)
         distances_pz = norms_pz + tf.transpose(norms_pz) - 2. * dotprods_pz
 
-        norms_qz = tf.reduce_sum(tf.square(sample_qz), axis=1, keepdims=True)
+        norms_qz = tf.reduce_sum(tf.square(sample_qz), axis=1)
         dotprods_qz = tf.matmul(sample_qz, sample_qz, transpose_b=True)
         distances_qz = norms_qz + tf.transpose(norms_qz) - 2. * dotprods_qz
 
@@ -459,7 +460,7 @@ class CNN_VAE(object):
           i = 0
           for X_train in data_gen(self.X[:self.train_num]):
               i += self.batch_size
-              if i > self.batch_size*10 and i % self.batch_size*10 == 0:
+              if i > (self.batch_size*10) and i % (self.batch_size*10) == 0:
                   print(i)
               if (i > self.batch_size*100) and (i % (self.batch_size*100) == 0): # every 1k images, save latest
                 hist = model.fit(x=X_train, y=X_train,
@@ -467,7 +468,7 @@ class CNN_VAE(object):
                       epochs=1,
                       callbacks=callbacks_list,
                       batch_size=self.batch_size,
-                      validation_data=(X_val, X_val))
+                      validation_data=(self.X_val, self.X_val))
                
                 vloss = hist.history['val_loss'][-1]
 
@@ -478,12 +479,12 @@ class CNN_VAE(object):
                   model.fit(x=X_train, y=X_train,
                       shuffle=True,
                       epochs=1,
-                verbose=int(i % self.batch_size*10 == 0),
+                verbose=int(i % (self.batch_size*10) == 0),
                       batch_size=self.batch_size)
 
 
 model = CNN_VAE()
 model.build_model(model.wae_loss)
-model.train(epochs=25)
+model.train(epochs=50)
 model.save_latent()
 
