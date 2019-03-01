@@ -41,14 +41,14 @@ class CNN_VAE(object):
     def __init__(self):
       self.img_shape = (224, 224, 3)
       self.batch_size = 32
-      self.latent_dim = 50  # Number of latent dimension parameters
+      self.latent_dim = 100  # Number of latent dimension parameters
       self.epochs = 1
       self.artists = {}
       self.artist_num = 0
       self.val_pct = 0.1 # percent of validation
-      self.learning_rate = 0.0001
+      self.learning_rate = 0.00001
 
-      self.kl_lambda = 0.5
+      self.kl_lambda = 1
       self.wae_lambda = 10
       self.recon_lambda = 1
 
@@ -58,10 +58,13 @@ class CNN_VAE(object):
       self.prior_sigma = 1
       self.z_prior = None
 
+      self.debug = False
+
       self.kernel = 'RBF' # Gaussian
-	
-      self.weight_file = 'weights_vgg_wae.001-56381.01.ckpt'
+
       self.weight_file = None
+      self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
+
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
@@ -87,13 +90,16 @@ class CNN_VAE(object):
         X = []
         y = []
         for name in im_names:
-            pic = Image.open(self.sp_folder + name)
-            #pic = pic.convert('L')
-            pic = pic.resize((224, 224))
             artist_name = name.split("_")[0]
             if artist_name in ['Nirvana', 'Rammstein', 'Soundgarden']:
                 continue
-            
+
+            #if artist_name not in ['DM', 'NeilYoung']:
+            #    continue
+
+            pic = Image.open(self.sp_folder + name)
+            pic = pic.resize((224, 224))
+
             if artist_name in self.artists:
                 y.append(self.artists[artist_name])
             else:
@@ -114,8 +120,8 @@ class CNN_VAE(object):
 
         self.train_num = int((1-self.val_pct)*len(self.X))
 
-        self.X_val = self.X[self.train_num:] / 255
-        self.y_val = y[self.train_num:]
+        self.X_val = self.X[self.train_num+25:] / 255
+        self.y_val = y[self.train_num+25:]
 
     def encoder(self, input_img):
         # Encoder architecture: VGG16 encoder with VGG16-style DCNN decoder
@@ -295,6 +301,11 @@ class CNN_VAE(object):
       if loss is None:
         loss = self.vae_loss
 
+      if loss is self.vae_loss:
+          print("Using VAE LOSS")
+      else:
+          print("Using WAE LOSS")
+
       self.input_img = keras.Input(shape=self.img_shape)
       z_enc, z_mu, z_log_sigma = self.encoder(self.input_img)
       self.decoder_input = layers.Input(K.int_shape(z_enc)[1:])
@@ -305,7 +316,7 @@ class CNN_VAE(object):
       opt = Adam(lr=self.learning_rate)
       vae = Model(self.input_img, z_dec)
       vae.compile(optimizer=opt, loss=loss)
-      if self.weight_file:
+      if self.weight_file is not None:
           vae.load_weights(self.weight_file)
       vae.summary()
       self.model = vae
@@ -389,13 +400,23 @@ class CNN_VAE(object):
 
         # Reconstruction loss
         xent_loss = keras.metrics.binary_crossentropy(x, z_decoded)
-        for s in self.img_shape:
-            xent_loss *= s
+        #for s in self.img_shape:
+        #    xent_loss *= s
         # xent_loss *= 224 * 224 * 3
 
         # KL divergence
         kl_loss = - K.sum(1 + self.z_log_sigma - K.square(self.z_mu) - K.exp(self.z_log_sigma), axis=-1)
-        return K.mean(self.recon_lambda * xent_loss + \
+	
+        wass_loss = tf.identity(wass_loss)
+        kl_loss = tf.identity(kl_loss)
+        xent_loss = tf.identity(xent_loss)
+	
+        if self.debug:
+            wass_loss = tf.Print(wass_loss, [wass_loss], 'wass_loss: ')
+            kl_loss = tf.Print(kl_loss, [kl_loss], 'kl_loss: ')
+            xent_loss = tf.Print(xent_loss, [xent_loss], 'reconstruction_loss: ')
+
+        return tf.reduce_mean(self.recon_lambda * xent_loss + \
                       self.kl_lambda * kl_loss + \
                       self.wae_lambda * wass_loss)
 
@@ -416,7 +437,7 @@ class CNN_VAE(object):
 
     
     def get_ckpointer(self):
-        filepath = "checkpoints/weights_vgg_wae.{epoch:03d}-{val_loss:.2f}.ckpt"
+        filepath = "checkpoints/weights_vgg_wae_allartists.{epoch:03d}-{val_loss:.2f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
                                     save_best_only=True, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
@@ -438,7 +459,7 @@ class CNN_VAE(object):
         if epochs is None:
             epochs = self.epochs
         
-        model = self.build_model()
+        #model = self.build_model(wae_loss)
 
         callbacks_list = self.get_ckpointer()
 
@@ -458,13 +479,13 @@ class CNN_VAE(object):
 
         for e in range(epochs):
           i = 0
-          for X_train in data_gen(self.X[:self.train_num]):
+          for X_train in data_gen(self.X[:self.train_num - (self.train_num % self.batch_size)]):
               i += self.batch_size
               if i > (self.batch_size*10) and i % (self.batch_size*10) == 0:
                   print(i)
               if (i > self.batch_size*100) and (i % (self.batch_size*100) == 0): # every 1k images, save latest
-                hist = model.fit(x=X_train, y=X_train,
-                      shuffle=True,
+                hist = self.model.fit(x=X_train, y=X_train,
+                      shuffle=False,
                       epochs=1,
                       callbacks=callbacks_list,
                       batch_size=self.batch_size,
@@ -476,8 +497,8 @@ class CNN_VAE(object):
                     break
                 old_vloss = vloss
               else:
-                  model.fit(x=X_train, y=X_train,
-                      shuffle=True,
+                  self.model.fit(x=X_train, y=X_train,
+                      shuffle=False,
                       epochs=1,
                 verbose=int(i % (self.batch_size*10) == 0),
                       batch_size=self.batch_size)
@@ -485,6 +506,6 @@ class CNN_VAE(object):
 
 model = CNN_VAE()
 model.build_model(model.wae_loss)
-model.train(epochs=50)
+model.train(epochs=40)
 model.save_latent()
 
