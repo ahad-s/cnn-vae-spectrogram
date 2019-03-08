@@ -19,30 +19,30 @@ latent_dim = 50
 
 art_back = {}
 for k, v in artists.items():
-	art_back[v] = k
+    art_back[v] = k
 
 
 #y_val[0] = "test"
 USE_TSNE = latent_dim > 2
 
 for i in range(max(y_val)):
-	new_y_val = np.copy(y_val)
-	for j in range(len(new_y_val)):
-		y_j = new_y_val[j]
-		if y_j != j:
-			new_y_val[j] = i+1
-	if USE_TSNE:
+    new_y_val = np.copy(y_val)
+    for j in range(len(new_y_val)):
+        y_j = new_y_val[j]
+        if y_j != j:
+            new_y_val[j] = i+1
+    if USE_TSNE:
             if i == 0:
                 reducer = TSNE(n_components=2, perplexity=pp,verbose=1)
                 z_mu_2 = reducer.fit_transform(z_mu_new)
-	    plt.figure(figsize=(10, 10))
-	    plt.scatter(z_mu_2[:, 0], z_mu_2[:, 1], c=new_y_val, cmap='brg')
-	    plt.colorbar()
-	#     plt.show()
-	else:
-	    plt.figure(figsize=(10, 10))
-	    plt.scatter(z_mu_new[:, 0], z_mu_new[:, 1], c=y_val, cmap='brg')
-	    plt.colorbar()
-	#     plt.show()
-	    
-	plt.savefig(str(art_back[i]) + "-test-pp" + str(pp) +"-lat" + str(latent_dim) + " ".join(sys.argv[1:]) + ".png")
+        plt.figure(figsize=(10, 10))
+        plt.scatter(z_mu_2[:, 0], z_mu_2[:, 1], c=new_y_val, cmap='brg')
+        plt.colorbar()
+    #     plt.show()
+    else:
+        plt.figure(figsize=(10, 10))
+        plt.scatter(z_mu_new[:, 0], z_mu_new[:, 1], c=y_val, cmap='brg')
+        plt.colorbar()
+    #     plt.show()
+        
+    plt.savefig(str(art_back[i]) + "-test-pp" + str(pp) +"-lat" + str(latent_dim) + " ".join(sys.argv[1:]) + ".png")
