@@ -1,21 +1,25 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+r_seed = 12345
 GPU = True
 import os
 
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import pandas as pd
 import numpy as np
+np.random.seed(r_seed)
+import tensorflow as tf
+tf.set_random_seed(r_seed)
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from scipy.stats import norm
+from scipy.stats import norm, truncnorm
 
 import keras
 from keras import layers
@@ -26,7 +30,6 @@ from keras import backend as K   # 'generic' backend so code works with either t
 from keras.optimizers import Adam
 
 from sys import exit
-import tensorflow as tf
 import scipy as sp
 
 from sklearn.manifold import TSNE
@@ -45,7 +48,7 @@ class CNN_VAE(object):
       self.epochs = 1
       self.artists = {}
       self.artist_num = 0 # num_classes
-      self.val_pct = 1 # percent of validation
+      self.val_pct = 0.1 # percent of validation
       self.learning_rate = 0.000001
 
       self.kl_lambda = 1
@@ -56,7 +59,6 @@ class CNN_VAE(object):
 
       self.prior_mu = 0
       self.prior_sigma = 1
-      self.z_prior = None
 
       self.debug = False
 
@@ -65,14 +67,15 @@ class CNN_VAE(object):
       self.weight_file = None
 #       self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
       #self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.51.ckpt'
-      self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
+      # self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
+
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
 
       self.populate_images()
         
-      self.get_z_prior()
+      self.z_prior = self.get_z_prior_samples()
 
 #       self.get_z_prior_samples()
 
@@ -90,13 +93,18 @@ class CNN_VAE(object):
       return self.z_prior
 
 
-    def get_z_prior_samples(self):
+   def get_z_prior_samples(self):
+      a, b, = -2, 2 # 2 stddevs away from N(0,1), as in tf.trunc_norm_initializer
+
       for i in range(self.artist_num):
         epsilon = K.random_normal([self.batch_size, self.latent_dim])
-        mean = tf.get_variable('prior_mean_1' + str(random.uniform(0,1)), shape=[self.latent_dim], dtype=tf.float32,
-                                                   initializer=tf.truncated_normal_initializer)
-        sigma = tf.get_variable('prior_sigma_1' + str(random.uniform(0,1)), shape=[self.latent_dim], dtype=tf.float32,
-                                                   initializer=tf.truncated_normal_initializer)
+        mean = truncnorm(a, b).rvs(self.latent_dim)
+        sigma = truncnorm(a, b).rvs(self.latent_dim)
+
+        self.prior_dists_np.append((mean, sigma))
+
+        mean = tf.convert_to_tensor(mean, name="prior_mean_{}".format(str(i)))
+        sigma = tf.convert_to_tensor(sigma, name="prior_sigma_{}".format(str(i)))
 
         dist = K.cast(mean + epsilon * K.exp(sigma), dtype='int32')
 
@@ -106,8 +114,9 @@ class CNN_VAE(object):
     
       print(self.prior_dists)
       print(self.input_labels)
-      self.z_sampled = tf.nn.embedding_lookup(self.prior_dists, self.input_labels)
-      return self.z_sampled
+      self.z_prior = tf.nn.embedding_lookup(self.prior_dists, self.input_labels)
+      return self.z_prior
+
 
 
     def populate_images(self, n=-1):
@@ -359,11 +368,6 @@ class CNN_VAE(object):
       self.model = vae
       return self.model
 
-    def sample_z_tilda_from_posterior(self):
-      epsilon = K.random_normal(K.shape(self.z_log_sigma))
-      self.z_tilda = self.z_mu + K.exp(self.z_log_sigma)*epsilon
-      return self.z_tilda
-
 
     # sample_pz -- p(z)
     # sample_qz -- q(z|x_i)
@@ -429,8 +433,7 @@ class CNN_VAE(object):
 
     def wae_loss(self, x, z_decoded):
 
-        wass_loss = self.mmd_penalty(self.z_prior, self.z)
-        wass_loss = self.mmd_penalty(self.z_prior, self.z)
+        wass_loss = self.mmd_penalty(self.z_prior, z_decoded)
   
         x = K.flatten(x)
         z_decoded = K.flatten(z_decoded)
@@ -474,7 +477,7 @@ class CNN_VAE(object):
 
     
     def get_ckpointer(self):
-        filepath = "checkpoints/weights_vgg_wae_2artists_nim_doors.{epoch:03d}-{val_loss:.4f}.ckpt"
+        filepath = "checkpoints/weights_vgg_wae.{epoch:03d}-{val_loss:.4f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
                                     save_best_only=True, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
@@ -489,6 +492,7 @@ class CNN_VAE(object):
       dd(z_mu_new, "z_mu.p")
       dd(self.y_val, "y_val.p")
       dd(self.artists, "artists.p")
+      dd(prior_dists_np, "priors.p")
 
 
     def train_supervised(self, epochs=None):
