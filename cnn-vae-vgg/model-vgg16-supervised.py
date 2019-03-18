@@ -7,7 +7,7 @@ import os
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import pandas as pd
 import numpy as np
@@ -40,13 +40,13 @@ import pickle
 class CNN_VAE(object):
     def __init__(self):
       self.img_shape = (224, 224, 3)
-      self.batch_size = 2
-      self.latent_dim = 100  # Number of latent dimension parameters
+      self.batch_size = 32
+      self.latent_dim = 50  # Number of latent dimension parameters
       self.epochs = 1
       self.artists = {}
       self.artist_num = 0 # num_classes
-      self.val_pct = 0.1 # percent of validation
-      self.learning_rate = 0.00001
+      self.val_pct = 1 # percent of validation
+      self.learning_rate = 0.000001
 
       self.kl_lambda = 1
       self.wae_lambda = 10
@@ -64,7 +64,8 @@ class CNN_VAE(object):
 
       self.weight_file = None
 #       self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
-
+      #self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.51.ckpt'
+      self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
@@ -117,13 +118,15 @@ class CNN_VAE(object):
         # im_names_train = random.choices(im_names, k=len(im_names))
         X = []
         y = []
-        for name in im_names[:50]:
+        for name in im_names:
             artist_name = name.split("_")[0]
             if artist_name in ['Nirvana', 'Rammstein', 'Soundgarden']:
                 continue
 
-            if artist_name not in ['DM', 'NeilYoung']:
-               continue
+            #if artist_name not in ['DM', 'NeilYoung']:
+            #   continue
+            #if artist_name not in ['Doors', 'NIN']:
+            #   continue
 
             pic = Image.open(self.sp_folder + name)
             pic = pic.resize((224, 224))
@@ -150,8 +153,8 @@ class CNN_VAE(object):
 
         self.train_num = int((1-self.val_pct)*len(self.X))
 
-        self.X_val = self.X[self.train_num:] / 255
-        self.y_val = y[self.train_num:]
+        self.X_val = self.X[self.train_num + 25:] / 255
+        self.y_val = y[self.train_num + 25:]
 
     def encoder(self, input_img):
         # Encoder architecture: VGG16 encoder with VGG16-style DCNN decoder
@@ -427,6 +430,7 @@ class CNN_VAE(object):
     def wae_loss(self, x, z_decoded):
 
         wass_loss = self.mmd_penalty(self.z_prior, self.z)
+        wass_loss = self.mmd_penalty(self.z_prior, self.z)
   
         x = K.flatten(x)
         z_decoded = K.flatten(z_decoded)
@@ -470,7 +474,7 @@ class CNN_VAE(object):
 
     
     def get_ckpointer(self):
-        filepath = "checkpoints/weights_vgg_wae_allartists.{epoch:03d}-{val_loss:.2f}.ckpt"
+        filepath = "checkpoints/weights_vgg_wae_2artists_nim_doors.{epoch:03d}-{val_loss:.4f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
                                     save_best_only=True, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
@@ -509,7 +513,7 @@ class CNN_VAE(object):
 
         old_vloss = 0
         err = 0.0001
-        val_zeros = np.zeros(self.batch_size)
+        val_zeros = np.zeros(self.X_val.shape[0])
 
         for e in range(epochs):
           i = 0
@@ -524,7 +528,7 @@ class CNN_VAE(object):
                       epochs=1,
                       callbacks=callbacks_list,
                       batch_size=self.batch_size,
-                      validation_data=((self.X_val, val_zeros), self.X_val))
+                      validation_data=([self.X_val, val_zeros], self.X_val))
                
                 vloss = hist.history['val_loss'][-1]
 
@@ -592,6 +596,7 @@ class CNN_VAE(object):
 
 model = CNN_VAE()
 model.build_model(model.wae_loss)
-model.train_supervised(epochs=5)
+model.train_supervised(epochs=0)
 model.save_latent()
+
 
