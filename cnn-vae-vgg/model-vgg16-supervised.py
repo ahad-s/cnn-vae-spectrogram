@@ -8,7 +8,7 @@ import os
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import pandas as pd
 import numpy as np
@@ -85,6 +85,8 @@ class CNN_VAE(object):
       self.prior_dists = []
       self.prior_dists_np = []
 
+      self.input_labels = keras.Input(shape=(1,), dtype='int32')
+
       self.z_prior = self.get_z_prior_samples()
 
 
@@ -109,7 +111,7 @@ class CNN_VAE(object):
         mean = tf.convert_to_tensor(mean, name="prior_mean_{}".format(str(i)), dtype=tf.float32)
         sigma = tf.convert_to_tensor(sigma, name="prior_sigma_{}".format(str(i)), dtype=tf.float32)
 
-        dist = K.cast(mean + epsilon * K.exp(sigma), dtype='int32')
+        dist = K.cast(mean + epsilon * K.exp(sigma), dtype='float32')
 
         self.prior_means.append(mean)
         self.prior_sigmas.append(sigma)
@@ -118,6 +120,8 @@ class CNN_VAE(object):
       print(self.prior_dists)
       print(self.input_labels)
       self.z_prior = tf.nn.embedding_lookup(self.prior_dists, self.input_labels)
+      self.z_prior = tf.reshape(self.z_prior, [-1, self.latent_dim])
+
       return self.z_prior
 
 
@@ -351,7 +355,6 @@ class CNN_VAE(object):
       else:
           print("Using WAE LOSS")
 
-      self.input_labels = keras.Input(shape=(1,), dtype='int32')
       self.input_img = keras.Input(shape=self.img_shape)
 
       self.get_z_prior_samples()
@@ -435,8 +438,11 @@ class CNN_VAE(object):
 
 
     def wae_loss(self, x, z_decoded):
-
-        wass_loss = self.mmd_penalty(self.z_prior, z_decoded)
+        print(self.z_prior, self.z)
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        wass_loss = self.mmd_penalty(self.z_prior, self.z)
   
         x = K.flatten(x)
         z_decoded = K.flatten(z_decoded)
@@ -495,7 +501,7 @@ class CNN_VAE(object):
       dd(z_mu_new, "z_mu.p")
       dd(self.y_val, "y_val.p")
       dd(self.artists, "artists.p")
-      dd(prior_dists_np, "priors.p")
+      dd(self.prior_dists_np, "priors.p")
 
 
     def train_supervised(self, epochs=None):
