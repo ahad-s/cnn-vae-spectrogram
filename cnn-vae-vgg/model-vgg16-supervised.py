@@ -41,7 +41,7 @@ import pickle
 
 
 class CNN_VAE(object):
-    def __init__(self):
+    def __init__(self, n_images=-1):
       self.img_shape = (224, 224, 3)
       self.batch_size = 32
       self.latent_dim = 50  # Number of latent dimension parameters
@@ -73,9 +73,8 @@ class CNN_VAE(object):
 
       self.sp_folder = "spectrogram_images/"
 
-      self.populate_images()
+      self.populate_images(n_images)
         
-      self.z_prior = self.get_z_prior_samples()
 
 #       self.get_z_prior_samples()
 
@@ -84,6 +83,10 @@ class CNN_VAE(object):
       self.prior_means = []
       self.prior_sigmas = []
       self.prior_dists = []
+      self.prior_dists_np = []
+
+      self.z_prior = self.get_z_prior_samples()
+
 
     def get_z_prior(self):
 
@@ -93,7 +96,7 @@ class CNN_VAE(object):
       return self.z_prior
 
 
-   def get_z_prior_samples(self):
+    def get_z_prior_samples(self):
       a, b, = -2, 2 # 2 stddevs away from N(0,1), as in tf.trunc_norm_initializer
 
       for i in range(self.artist_num):
@@ -103,8 +106,8 @@ class CNN_VAE(object):
 
         self.prior_dists_np.append((mean, sigma))
 
-        mean = tf.convert_to_tensor(mean, name="prior_mean_{}".format(str(i)))
-        sigma = tf.convert_to_tensor(sigma, name="prior_sigma_{}".format(str(i)))
+        mean = tf.convert_to_tensor(mean, name="prior_mean_{}".format(str(i)), dtype=tf.float32)
+        sigma = tf.convert_to_tensor(sigma, name="prior_sigma_{}".format(str(i)), dtype=tf.float32)
 
         dist = K.cast(mean + epsilon * K.exp(sigma), dtype='int32')
 
@@ -123,7 +126,7 @@ class CNN_VAE(object):
         im_names = os.listdir(self.sp_folder)
         if n != -1:
             im_names = im_names[:n]
-        random.shuffle(im_names)
+        random.Random(r_seed).shuffle(im_names)
         # im_names_train = random.choices(im_names, k=len(im_names))
         X = []
         y = []
@@ -598,9 +601,12 @@ class CNN_VAE(object):
 
 
 
-model = CNN_VAE()
+model = CNN_VAE(400)
 model.build_model(model.wae_loss)
-model.train_supervised(epochs=0)
-model.save_latent()
+try:
+    model.train_supervised(epochs=2)
+    model.save_latent()
+except KeyboardInterrupt:
+    model.save_latent()
 
 
