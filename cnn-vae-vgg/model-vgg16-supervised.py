@@ -12,9 +12,9 @@ if GPU:
 
 import pandas as pd
 import numpy as np
-np.random.seed(r_seed)
+# np.random.seed(r_seed)
 import tensorflow as tf
-tf.set_random_seed(r_seed)
+# tf.set_random_seed(r_seed)
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
