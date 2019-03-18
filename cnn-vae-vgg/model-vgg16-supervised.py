@@ -60,7 +60,7 @@ class CNN_VAE(object):
       self.prior_mu = 0
       self.prior_sigma = 1
 
-      self.debug = False
+      self.debug = True
 
       self.kernel = 'RBF' # Gaussian
 
@@ -68,11 +68,11 @@ class CNN_VAE(object):
 #       self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
       #self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.51.ckpt'
       # self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
-
+      self.weight_file = 'checkpoints/weights_vgg_wae.001-6.0998.ckpt'
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
-
+      self.sp_folder = "/collection/aghabuss/datasets/spectrogram_images/"
       self.populate_images(n_images)
         
 
@@ -607,10 +607,10 @@ class CNN_VAE(object):
 
 
 
-model = CNN_VAE(400)
+model = CNN_VAE()
 model.build_model(model.wae_loss)
 try:
-    model.train_supervised(epochs=2)
+    model.train_supervised(epochs=0)
     model.save_latent()
 except KeyboardInterrupt:
     model.save_latent()
