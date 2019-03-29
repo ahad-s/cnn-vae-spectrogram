@@ -8,7 +8,7 @@ import os
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import pandas as pd
 import numpy as np
@@ -149,8 +149,6 @@ class CNN_VAE(object):
       print("---Z PRIOR---")
       print(self.z_prior)
       #self.z_prior = tf.reshape(self.z_prior, [-1, self.latent_dim])
-      #print(self.z_prior)
-
       return self.z_prior
 
 
@@ -572,7 +570,6 @@ class CNN_VAE(object):
         """
         Each batch is of the same label/artist
         """
-        """
         def data_gen(X, y):
           n = len(X)
           i = 0
@@ -589,7 +586,6 @@ class CNN_VAE(object):
             yield X_in_batch[batch_idx] / 255, y_in_batch[batch_idx]
 
         """
-        
         def data_gen(X, y):
           n = len(X)
           i = 0
@@ -598,6 +594,7 @@ class CNN_VAE(object):
 
             yield X[i:i+self.batch_size]/255, y[i:i+self.batch_size]
             i += self.batch_size
+        """
 
         old_vloss = 0
         err = 0.0001
@@ -636,7 +633,7 @@ class CNN_VAE(object):
 model = CNN_VAE()
 model.build_model(model.wae_loss)
 try:
-    model.train_unsupervised(epochs=25)
+    model.train_supervised(epochs=0)
     model.save_latent()
 except KeyboardInterrupt:
     model.save_latent()
