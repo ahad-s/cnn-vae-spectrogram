@@ -29,12 +29,14 @@ for i in range(max(y_val)):
     new_y_val = np.copy(y_val)
     for j in range(len(new_y_val)):
         y_j = new_y_val[j]
-        if y_j != j:
-            new_y_val[j] = i+1
+        if y_j != i:
+            new_y_val[j] = 0
+        else:
+            new_y_val[j] = 1
     if USE_TSNE:
-            if i == 0:
-                reducer = TSNE(n_components=2, perplexity=pp,verbose=1)
-                z_mu_2 = reducer.fit_transform(z_mu_new)
+        if i == 0:
+            reducer = TSNE(n_components=2, perplexity=pp,verbose=1)
+            z_mu_2 = reducer.fit_transform(z_mu_new)
         plt.figure(figsize=(10, 10))
         plt.scatter(z_mu_2[:, 0], z_mu_2[:, 1], c=new_y_val, cmap='brg')
         plt.colorbar()
