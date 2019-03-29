@@ -60,7 +60,7 @@ class CNN_VAE(object):
       self.prior_mu = 0
       self.prior_sigma = 1
 
-      self.debug = False
+      self.debug = True
 
       self.kernel = 'RBF' # Gaussian
 
@@ -68,11 +68,11 @@ class CNN_VAE(object):
 #       self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
       #self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.51.ckpt'
       # self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
-
+      self.weight_file = 'checkpoints/weights_vgg_wae.001-6.0998.ckpt'
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
-
+      self.sp_folder = "/collection/aghabuss/datasets/spectrogram_images/"
       self.populate_images(n_images)
         
 
@@ -164,6 +164,9 @@ class CNN_VAE(object):
         X = np.array(X)
         y = np.array(y, dtype=np.int32)
 
+
+
+
         self.X = X[:, :, :, :-1]
         self.y = y
 
@@ -171,6 +174,27 @@ class CNN_VAE(object):
 
         self.X_val = self.X[self.train_num + 25:] / 255
         self.y_val = y[self.train_num + 25:]
+
+        self.X_train = self.X[:self.train_num]
+        self.y_train = self.y[:self.train_num]
+
+        # indices of each artist x_i-y_i
+        index_sets = [[] for i in range(self.artist_num)]
+        for i in range(len(self.y_train)):
+          index_sets[self.y_train[i]].append(i)
+
+        # should sum up to 1
+        self.artist_probs = []
+        for i in index_sets:
+          self.artist_probs.append(len(index_sets)/len(self.y_train))
+
+
+        self.X_splits = []
+        self.y_splits = []
+        for idxs in index_sets:
+          self.X_splits.append(self.X_train[idxs])
+          self.y_splits.append(self.y_train[idxs])
+
 
     def encoder(self, input_img):
         # Encoder architecture: VGG16 encoder with VGG16-style DCNN decoder
@@ -488,7 +512,7 @@ class CNN_VAE(object):
     def get_ckpointer(self):
         filepath = "checkpoints/weights_vgg_wae.{epoch:03d}-{val_loss:.4f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
-                                    save_best_only=True, save_weights_only=True,mode='auto', period=1)
+                                    save_best_only=False, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
         return callbacks_list
 
@@ -508,13 +532,33 @@ class CNN_VAE(object):
             
         if epochs is None:
             epochs = self.epochs
-        
-        #model = self.build_model(wae_loss)
 
         callbacks_list = self.get_ckpointer()
 
         print("STARTING EPOCHS...")
 
+        weight_probs = []
+
+
+        """
+        Each batch is of the same label/artist
+        """
+        def data_gen(X, y):
+          n = len(X)
+          i = 0
+          num_batches = n // self.batch_size
+          labels = list(range(self.artist_num))
+
+          for i in range(num_batches):
+            rnd_lab = np.random.choice(labels, p=self.artist_probs)
+            X_in_batch = self.X_splits[rnd_lab]
+            y_in_batch = self.y_splits[rnd_lab]
+            batch_idx = np.random.choice(np.arange(len(X_in_batch)), 
+                                          self.batch_size,
+                                          replace=False)
+            yield X_in_batch[batch_idx] / 255, y_in_batch[batch_idx]
+
+        """
         def data_gen(X, y):
           n = len(X)
           i = 0
@@ -523,6 +567,7 @@ class CNN_VAE(object):
 
             yield X[i:i+self.batch_size]/255, y[i:i+self.batch_size]
             i += self.batch_size
+        """
 
         old_vloss = 0
         err = 0.0001
@@ -556,61 +601,12 @@ class CNN_VAE(object):
                       batch_size=self.batch_size)
 
 
-    def train(self, epochs=None):
-            
-        if epochs is None:
-            epochs = self.epochs
-        
-        #model = self.build_model(wae_loss)
-
-        callbacks_list = self.get_ckpointer()
-
-        print("STARTING EPOCHS...")
-
-        def data_gen(X):
-          n = len(X)
-          i = 0
-
-          while i < n:
-
-            yield X[i:i+self.batch_size]/255
-            i += self.batch_size
-
-        old_vloss = 0
-        err = 0.0001
-
-        for e in range(epochs):
-          i = 0
-          for X_train in data_gen(self.X[:self.train_num - (self.train_num % self.batch_size)]):
-              i += self.batch_size
-              if i > (self.batch_size*10) and i % (self.batch_size*10) == 0:
-                  print(i)
-              if (i > self.batch_size*100) and (i % (self.batch_size*100) == 0): # every 1k images, save latest
-                hist = self.model.fit(x=X_train, y=X_train,
-                      shuffle=False,
-                      epochs=1,
-                      callbacks=callbacks_list,
-                      batch_size=self.batch_size,
-                      validation_data=(self.X_val, self.X_val))
-               
-                vloss = hist.history['val_loss'][-1]
-
-                if abs(vloss - old_vloss) < err:
-                    break
-                old_vloss = vloss
-              else:
-                  self.model.fit(x=X_train, y=X_train,
-                      shuffle=False,
-                      epochs=1,
-                verbose=int(i % (self.batch_size*10) == 0),
-                      batch_size=self.batch_size)
 
 
-
-model = CNN_VAE(400)
+model = CNN_VAE()
 model.build_model(model.wae_loss)
 try:
-    model.train_supervised(epochs=2)
+    model.train_supervised(epochs=0)
     model.save_latent()
 except KeyboardInterrupt:
     model.save_latent()
