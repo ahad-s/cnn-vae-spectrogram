@@ -8,7 +8,7 @@ import os
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import pandas as pd
 import numpy as np
@@ -42,17 +42,17 @@ import pickle
 
 class CNN_VAE(object):
     def __init__(self, n_images=-1):
-      self.img_shape = (28, 28, 1)
+      self.img_shape = (224, 224, 3)
       self.batch_size = 32
-      self.latent_dim = 10  # Number of latent dimension parameters
+      self.latent_dim = 50  # Number of latent dimension parameters
       self.epochs = 1
       self.artists = {}
-      self.artist_num = 10 # num_classes
+      self.artist_num = 0 # num_classes
       self.val_pct = 0.1 # percent of validation
       self.learning_rate = 0.000001
 
       self.kl_lambda = 1
-      self.wae_lambda = 3
+      self.wae_lambda = 10
       self.recon_lambda = 1
 
       self.z_temp = 1 # temperature - multiplier for sigma
@@ -60,7 +60,7 @@ class CNN_VAE(object):
       self.prior_mu = 0
       self.prior_sigma = 1
 
-      self.debug = True
+      self.debug = False
 
       self.kernel = 'RBF' # Gaussian
 
@@ -72,7 +72,7 @@ class CNN_VAE(object):
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
-      self.sp_folder = "/collection/aghabuss/datasets/spectrogram_images/"
+      self.sp_folder = "friends_images/"
       self.populate_images(n_images)
         
 
@@ -90,24 +90,6 @@ class CNN_VAE(object):
       self.z_prior = self.get_z_prior_samples()
 
 
-    def gumbel_softmax(self, weights, hard=True):
-      epsilon = 1e-20
-
-      log_weights = tf.log(weights)
-
-      u = tf.random_uniform(tf.shape(log_weights), minval=0, maxval=1)
-      gmbl_noise = -tf.log(-tf.log(u + epsilon) + epsilon)
-
-      y = tf.nn.softmax(log_weights + gmbl_noise)
-
-      if hard:
-        k = tf.shape(log_weights)[-1]
-        y_hard = tf.cast(tf.equal(y,tf.reduce_max(y, axis=-1)), y.dtype)
-        y = tf.stop_gradient(y_hard - y) + y
-
-      return y
-
-
     def get_z_prior(self):
 
       epsilon = K.random_normal(shape=(self.batch_size, self.latent_dim),
@@ -118,7 +100,6 @@ class CNN_VAE(object):
 
     def get_z_prior_samples(self):
       a, b, = -2, 2 # 2 stddevs away from N(0,1), as in tf.trunc_norm_initializer
-      self.prior_weights = [] 
 
       for i in range(self.artist_num):
         epsilon = K.random_normal([self.batch_size, self.latent_dim])
@@ -129,54 +110,86 @@ class CNN_VAE(object):
 
         mean = tf.convert_to_tensor(mean, name="prior_mean_{}".format(str(i)), dtype=tf.float32)
         sigma = tf.convert_to_tensor(sigma, name="prior_sigma_{}".format(str(i)), dtype=tf.float32)
-        weight = tf.Variable(-(i+1), name="prior_weight_{}".format(str(i)), dtype=tf.float32)
+
         dist = K.cast(mean + epsilon * K.exp(sigma), dtype='float32')
 
         self.prior_means.append(mean)
         self.prior_sigmas.append(sigma)
-        self.prior_weights.append(weight)
         self.prior_dists.append(dist)
-      self.z_prior = self.prior_dists[0]
-      return self.z_prior    
+    
+      print(self.prior_dists)
+      print(self.input_labels)
+      self.z_prior = tf.nn.embedding_lookup(self.prior_dists, self.input_labels)
+      self.z_prior = tf.reshape(self.z_prior, [-1, self.latent_dim])
 
-      self.z_prior = tf.zeros(shape=(self.batch_size, self.latent_dim))
-      self.alphas = self.gumbel_softmax(self.prior_weights, hard=True)
-      for i in range(self.artist_num):
-        alpha_i = tf.nn.embedding_lookup(self.alphas, [i])
-        print(alpha_i)
-        print(self.prior_dists[i])
-        break
-        self.z_prior += alpha_i * self.prior_dists[i]
-
-      print("---Z PRIOR---")
-      print(self.z_prior)
-      #self.z_prior = tf.reshape(self.z_prior, [-1, self.latent_dim])
       return self.z_prior
 
 
 
     def populate_images(self, n=-1):
-        Z_train = pd.read_csv("train.csv")
-      # y_train = Z_train['label'].values
-        X = Z_train.drop('label', axis=1).values
-        self.y = y = Z_train['label'].values
+        im_names = os.listdir(self.sp_folder)
+        if n != -1:
+            im_names = im_names[:n]
+        random.Random(r_seed).shuffle(im_names)
+        # im_names_train = random.choices(im_names, k=len(im_names))
+        X = []
+        y = []
+        for name in im_names:
+            artist_name = name.split("_")[1]
+            if artist_name in ['Nirvana', 'Rammstein', 'Soundgarden']:
+                continue
+            if artist_name not in ['Chandler', 'Monica', 'Ross', 'Rachel', 'Joey', 'Phoebe']:
+                continue
 
-        self.X = X.reshape(X.shape[0], 28, 28, 1)
+            #if artist_name not in ['DM', 'NeilYoung']:
+            #   continue
+            #if artist_name not in ['Doors', 'NIN']:
+            #   continue
+
+            pic = Image.open(self.sp_folder + name)
+            pic = pic.resize((224, 224))
+
+            if artist_name in self.artists:
+                y.append(self.artists[artist_name])
+            else:
+                self.artists[artist_name] = self.artist_num
+                y.append(self.artist_num)
+                
+                self.artist_num += 1
+                
+            x_i = np.array(pic)
+            X.append(x_i)
+
+
+        print("Loaded %d images." % len(X))
+
+        X = np.array(X)
+        y = np.array(y, dtype=np.int32)
+
+
+
+
+        self.X = X[:, :, :, :-1]
+        self.y = y
+
         self.train_num = int((1-self.val_pct)*len(self.X))
 
-        self.X_val = X[self.train_num:-8].reshape(-1, 28, 28, 1) / 255
-        self.y_val = y[self.train_num:-8]
-        
-        self.X_train = self.X[:self.train_num]
-        self.y_train = self.y[:self.train_num]
+        self.X_val = self.X[self.train_num:-30] / 255
+        self.y_val = y[self.train_num:-30]
+
+        self.X_train = self.X[:self.train_num - 30]
+        self.y_train = self.y[:self.train_num - 30]
 
         # indices of each artist x_i-y_i
-        index_sets = [[] for i in range(10)]
+        index_sets = [[] for i in range(self.artist_num)]
         for i in range(len(self.y_train)):
           index_sets[self.y_train[i]].append(i)
 
         # should sum up to 1
-        self.artist_probs = [0.1] * 10
+        self.artist_probs = []
+        for i in index_sets:
+          self.artist_probs.append(len(i)/len(self.y_train))
+        print("@@@@@@@@@@@@@@@@@",self.artist_probs)
 
         self.X_splits = []
         self.y_splits = []
@@ -187,28 +200,71 @@ class CNN_VAE(object):
 
     def encoder(self, input_img):
         # Encoder architecture: VGG16 encoder with VGG16-style DCNN decoder
-        print("ENCOEDR", input_img)
-        x = layers.Conv2D(32, 3,
-                          padding='same',
-                          input_shape=(28,28,1), 
-                          activation='relu')(input_img)
-        x = layers.Conv2D(64, 3,
-                          padding='same', 
-                          activation='relu',
-                          strides=(2, 2))(x)
-        x = layers.Conv2D(64, 3,
-                          padding='same', 
-                          activation='relu')(x)
-        x = layers.Conv2D(64, 3,
-                          padding='same', 
-                          activation='relu')(x)
+
+        x = Conv2D(64, (3,3), strides=1, padding='same',
+            input_shape=(224, 224, 3), 
+            activation='relu')(input_img)
+
+        x = Conv2D(64, (3,3), strides=1, padding='same',
+            activation='relu')(x)
+
+        ###############################################
+        x = MaxPooling2D(pool_size=(2,2))(x)
+        ###############################################
+
+        x = Conv2D(128, (3,3), strides=1, padding='same', 
+          activation='relu',)(x)
+
+        x = Conv2D(128, (3,3), strides=1, padding='same', 
+          activation='relu',)(x)
+
+        ###############################################
+        x = MaxPooling2D(pool_size=(2,2))(x)
+        ###############################################
+
+        x = Conv2D(256, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        x = Conv2D(256, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        x = Conv2D(256, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        ###############################################
+        x = MaxPooling2D(pool_size=(2,2))(x)
+        ###############################################
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        ###############################################
+        x = MaxPooling2D(pool_size=(2,2))(x)
+        ###############################################
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        ###############################################
+        x = MaxPooling2D(pool_size=(2,2))(x)
+        ###############################################
 
         self.shape_before_flattening = K.int_shape(x)
 
         x = Flatten()(x)
 
-        x = Dense(32, activation='relu')(x)
-#         x = Dense(32, activation='relu')(x)
+        x = Dense(4096, activation='relu')(x)
+        x = Dense(4096, activation='relu')(x)
 
         # Two outputs, latent mean and (log)variance
         self.z_mu = Dense(self.latent_dim)(x)
@@ -231,27 +287,81 @@ class CNN_VAE(object):
 
         return self.z, self.z_mu, self.z_log_sigma
 
-
     def decoder(self, decoder_input, z_enc):
         # decoder takes the latent distribution sample as input
         # decoder_input = layers.Input(K.int_shape(z)[1:])
 
-        # Expand to 224x224 total pixel
-        # use Conv2DTranspose to reverse the conv layers from the encoder
-        # Expand to 784 total pixels
-        print("##################",decoder_input)
+        # Expand to 224x224 total pixels
         x = layers.Dense(np.prod(self.shape_before_flattening[1:]),
                          activation='relu')(decoder_input)
 
         # reshape
-        x = layers.Reshape(self.shape_before_flattening[1:])(x)        
+        x = layers.Reshape(self.shape_before_flattening[1:])(x)
 
-        print(x)
-        x = layers.Conv2DTranspose(32, 3,
+        # use Conv2DTranspose to reverse the conv layers from the encoder
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        #x = Conv2D(512, (3,3), strides=1, padding='same',
+        #  activation='relu')(x)
+
+        ###############################################
+        x = layers.Conv2DTranspose(512, 3,
                                    padding='same', 
                                    activation='relu',
                                    strides=(2, 2))(x)
-        x = layers.Conv2D(1, 3,
+        ###############################################
+
+
+        x = Conv2D(512, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        #x = Conv2D(512, (3,3), strides=1, padding='same',
+        #  activation='relu')(x)
+
+
+        ###############################################
+        x = layers.Conv2DTranspose(512, 3,
+                                   padding='same', 
+                                   activation='relu',
+                                   strides=(2, 2))(x)
+        ###############################################
+
+
+        x = Conv2D(256, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        x = Conv2D(256, (3,3), strides=1, padding='same',
+          activation='relu')(x)
+
+        ###############################################
+        x = layers.Conv2DTranspose(256, 3,
+                                   padding='same', 
+                                   activation='relu',
+                                   strides=(2, 2))(x)
+        ###############################################
+
+
+        x = Conv2D(128, (3,3), strides=1, padding='same', 
+          activation='relu',)(x)
+
+        x = layers.Conv2DTranspose(128, 3,
+                                   padding='same', 
+                                   activation='relu',
+                                   strides=(2, 2))(x)
+
+        x = Conv2D(64, (3,3), strides=1, padding='same', 
+          activation='relu',)(x)
+
+        ###############################################
+        x = layers.Conv2DTranspose(64, 3,
+                                   padding='same', 
+                                   activation='relu',
+                                   strides=(2, 2))(x)
+        ###############################################
+
+        x = layers.Conv2D(3, 3,
                           padding='same', 
                           activation='sigmoid')(x)
 
@@ -277,8 +387,6 @@ class CNN_VAE(object):
 
       z_enc, z_mu, z_log_sigma = self.encoder(self.input_img)
       self.decoder_input = layers.Input(K.int_shape(z_enc)[1:])
-      print(self.decoder_input)
-      print(z_enc)
       z_dec, dec = self.decoder(self.decoder_input, z_enc)
       dec.summary()
 
@@ -404,7 +512,7 @@ class CNN_VAE(object):
 
     
     def get_ckpointer(self):
-        filepath = "checkpoints/unsup_mnist_weights_vgg_wae.{epoch:03d}-{val_loss:.4f}.ckpt"
+        filepath = "checkpoints/weights_vgg_wae.{epoch:03d}-{val_loss:.4f}.ckpt"
         checkpoint = ModelCheckpoint(filepath, monitor='loss', verbose=1, 
                                     save_best_only=False, save_weights_only=True,mode='auto', period=1)
         callbacks_list = [checkpoint]
@@ -416,13 +524,13 @@ class CNN_VAE(object):
 
 
       dd = lambda d, f: pickle.dump(d, open(f, "wb"))
-      dd(z_mu_new, "z_mu_unsup.p")
-      dd(self.y_val, "y_val_unsup.p")
-      dd(self.artists, "artists_unsup.p")
-      dd(self.prior_dists_np, "priors_unsup.p")
+      dd(z_mu_new, "z_mu.p")
+      dd(self.y_val, "y_val.p")
+      dd(self.artists, "artists.p")
+      dd(self.prior_dists_np, "priors.p")
 
 
-    def train_unsupervised(self, epochs=None):
+    def train_supervised(self, epochs=None):
             
         if epochs is None:
             epochs = self.epochs
@@ -452,6 +560,7 @@ class CNN_VAE(object):
                                           replace=False)
             yield X_in_batch[batch_idx] / 255, y_in_batch[batch_idx]
 
+        
         """
         def data_gen(X, y):
           n = len(X)
@@ -500,7 +609,7 @@ class CNN_VAE(object):
 model = CNN_VAE()
 model.build_model(model.wae_loss)
 try:
-    model.train_unsupervised(epochs=25)
+    model.train_supervised(epochs=25)
     model.save_latent()
 except KeyboardInterrupt:
     model.save_latent()

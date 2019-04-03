@@ -8,7 +8,7 @@ import os
 if GPU:
 
   os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import pandas as pd
 import numpy as np
@@ -60,7 +60,7 @@ class CNN_VAE(object):
       self.prior_mu = 0
       self.prior_sigma = 1
 
-      self.debug = True
+      self.debug = False
 
       self.kernel = 'RBF' # Gaussian
 
@@ -68,7 +68,7 @@ class CNN_VAE(object):
 #       self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.50.ckpt'
       #self.weight_file = 'checkpoints/weights_vgg_wae_allartists.001-0.51.ckpt'
       # self.weight_file = 'checkpoints/weights_vgg_wae_allartists_actual.001-0.52.ckpt'
-      self.weight_file = 'checkpoints/weights_vgg_wae.001-6.0998.ckpt'
+      #self.weight_file = 'checkpoints/weights_vgg_wae.001-6.0998.ckpt'
       self.model = None 
 
       self.sp_folder = "spectrogram_images/"
@@ -186,8 +186,8 @@ class CNN_VAE(object):
         # should sum up to 1
         self.artist_probs = []
         for i in index_sets:
-          self.artist_probs.append(len(index_sets)/len(self.y_train))
-
+          self.artist_probs.append(len(i)/len(self.y_train))
+        print("@@@@@@@@@@@@@@@@@",self.artist_probs)
 
         self.X_splits = []
         self.y_splits = []
@@ -558,6 +558,7 @@ class CNN_VAE(object):
                                           replace=False)
             yield X_in_batch[batch_idx] / 255, y_in_batch[batch_idx]
 
+        
         """
         def data_gen(X, y):
           n = len(X)
@@ -606,7 +607,7 @@ class CNN_VAE(object):
 model = CNN_VAE()
 model.build_model(model.wae_loss)
 try:
-    model.train_supervised(epochs=0)
+    model.train_supervised(epochs=25)
     model.save_latent()
 except KeyboardInterrupt:
     model.save_latent()
